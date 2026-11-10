@@ -526,6 +526,8 @@ async function renderCoursePage(courseId) {
   } else {
     loadError = 'Lecture storage is not connected yet.';
   }
+  const videoCount = lectures.filter(lecture => lecture.lecture_type === 'video').length;
+  setCourseLessonCount(courseId, videoCount);
   const progress = courseProgress()[courseId] || [];
   const lessons = course.lessons.map((lesson, index) => `<button class="course-lesson" data-course-page-lesson="${courseId}" data-lesson-index="${index}"><span class="lesson-number">${progress.includes(index) ? '✓' : String(index + 1).padStart(2, '0')}</span><span><b>${escapeHtml(lesson.title)}</b><small>${progress.includes(index) ? 'Completed' : 'Short lesson'}</small></span><i>→</i></button>`).join('');
   const materials = lectures.map(lecture => {
@@ -537,7 +539,7 @@ async function renderCoursePage(courseId) {
   }).join('');
   const ownerPanel = isAdmin() ? `<form class="lecture-upload-panel" id="courseLectureForm"><div class="lecture-upload-intro"><div><div class="eyebrow section-eyebrow">INSTRUCTOR TOOLS</div><h3>Add a lecture</h3><p>Upload a video or PDF for this course. Files up to 50 MB are supported.</p></div><span>↑</span></div><label class="form-field"><span>Lecture title</span><input id="lectureTitle" name="title" maxlength="140" placeholder="e.g. Lesson 1: HTML basics" required></label><div class="lecture-upload-fields"><label class="form-field"><span>Lecture format</span><select id="lectureType" name="type"><option value="video">Video (MP4 or WebM)</option><option value="pdf">PDF document</option></select></label><label class="form-field"><span>Choose file</span><input id="lectureFile" name="file" type="file" accept="video/mp4,video/webm,application/pdf,.mp4,.webm,.pdf" required></label></div><button class="primary-button" id="uploadLectureButton" type="submit">Upload lecture <span>↑</span></button><p class="form-note" id="lectureUploadStatus" aria-live="polite">Uploads are resumable and restricted to the site owner.</p></form>` : '';
   const backendMessage = loadError ? `<div class="lecture-notice">Lecture files are not available right now. ${isAdmin() ? 'The lecture storage setup must be enabled in the connected backend before uploads can be saved.' : 'Please check back later.'}</div>` : '';
-  host.innerHTML = `<div class="course-detail-top"><a class="back-to-courses" href="#courses">← All courses</a><span class="course-detail-tag">LEARNING PATH · BEGINNER</span></div><div class="course-detail-hero"><div><div class="eyebrow section-eyebrow">YOUR NEXT LEARNING PATH</div><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.intro)}</p><button class="outline-button" id="coursePageQuiz">Take a quick quiz <span>→</span></button></div><div class="course-detail-art">${courseId === 'web' ? '&lt;/&gt;' : courseId === 'math' ? 'π' : '✿'}</div></div><div class="course-detail-columns"><section class="course-detail-lessons"><div class="course-detail-heading"><div><div class="eyebrow section-eyebrow">COURSE OUTLINE</div><h2>Your lessons</h2><p>${course.lessons.length} short lessons · save your progress as you go</p></div></div><div class="course-lesson-list">${lessons}</div></section><section class="course-detail-materials"><div class="course-detail-heading"><div><div class="eyebrow section-eyebrow">WATCH & READ</div><h2>Lecture library</h2><p>Videos and PDFs for this learning path.</p></div></div>${ownerPanel}${backendMessage}${lectures.length ? `<div class="lecture-list">${materials}</div>` : `<div class="lecture-empty"><span>✳</span><b>${loadError ? 'Lecture library is getting ready.' : 'No lectures uploaded yet.'}</b><small>${isAdmin() ? 'Use the upload form to add a video or PDF to this course.' : 'The course owner will add lecture videos and PDFs here.'}</small></div>`}</section></div>`;
+  host.innerHTML = `<div class="course-detail-top"><a class="back-to-courses" href="#courses">← All courses</a><span class="course-detail-tag">LEARNING PATH · BEGINNER · <span data-course-detail-count="${courseId}">${videoCount} video ${videoCount === 1 ? 'lesson' : 'lessons'}</span></span></div><div class="course-detail-hero"><div><div class="eyebrow section-eyebrow">YOUR NEXT LEARNING PATH</div><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.intro)}</p><button class="outline-button" id="coursePageQuiz">Take a quick quiz <span>→</span></button></div><div class="course-detail-art">${courseId === 'web' ? '&lt;/&gt;' : courseId === 'math' ? 'π' : '✿'}</div></div><div class="course-detail-columns"><section class="course-detail-lessons"><div class="course-detail-heading"><div><div class="eyebrow section-eyebrow">COURSE OUTLINE</div><h2>Guided practice</h2><p>Short readings and worked examples to practice as you learn.</p></div></div><div class="course-lesson-list">${lessons}</div></section><section class="course-detail-materials"><div class="course-detail-heading"><div><div class="eyebrow section-eyebrow">WATCH & READ</div><h2>Lecture library</h2><p>Each uploaded video adds one lesson; PDFs are supporting materials.</p></div></div>${ownerPanel}${backendMessage}${lectures.length ? `<div class="lecture-list">${materials}</div>` : `<div class="lecture-empty"><span>✳</span><b>${loadError ? 'Lecture library is getting ready.' : 'No lectures uploaded yet.'}</b><small>${isAdmin() ? 'Use the upload form to add a video or PDF to this course.' : 'The course owner will add lecture videos and PDFs here.'}</small></div>`}</section></div>`;
   host.querySelectorAll('[data-course-page-lesson]').forEach(button => button.addEventListener('click', () => showLesson(button.dataset.coursePageLesson, Number(button.dataset.lessonIndex))));
   $('coursePageQuiz')?.addEventListener('click', () => showQuiz(courseId));
   $('courseLectureForm')?.addEventListener('submit', event => uploadCourseLecture(event, courseId));
@@ -694,10 +696,28 @@ function filterCourses() {
   $('courseResults').textContent = `${visible} ${visible === 1 ? 'course' : 'courses'} found`;
   $('courseEmpty').hidden = visible > 0;
 }
+function setCourseLessonCount(courseId, count) {
+  const label = `${count} ${count === 1 ? 'lesson' : 'lessons'}`;
+  document.querySelectorAll('[data-course-lesson-count]').forEach(node => {
+    if (node.dataset.courseLessonCount === courseId) node.textContent = label;
+  });
+  document.querySelectorAll('[data-course-detail-count]').forEach(node => {
+    if (node.dataset.courseDetailCount === courseId) node.textContent = `${count} video ${count === 1 ? 'lesson' : 'lessons'}`;
+  });
+}
+async function loadCourseLessonCounts() {
+  if (!supabase) return;
+  const { data, error } = await supabase.from('course_lectures').select('course_id').eq('lecture_type', 'video').limit(1000);
+  if (error) return;
+  const counts = { web: 0, math: 0, science: 0 };
+  (data || []).forEach(lecture => { if (Object.prototype.hasOwnProperty.call(counts, lecture.course_id)) counts[lecture.course_id] += 1; });
+  Object.entries(counts).forEach(([courseId, count]) => setCourseLessonCount(courseId, count));
+}
 ['courseSearch', 'courseSubject', 'courseLevel'].forEach(id => {
   $(id)?.addEventListener(id === 'courseSearch' ? 'input' : 'change', filterCourses);
 });
 filterCourses();
+if (document.querySelector('[data-course-lesson-count]')) loadCourseLessonCounts();
 const pageTitles = {
   home: 'learnByAnkit — Learn something new, every day',
   courses: 'Courses · learnByAnkit',
