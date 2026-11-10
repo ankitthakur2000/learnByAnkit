@@ -11,6 +11,7 @@ const toastNode = $('toast');
 let toastTimer;
 let stagedFiles = [];
 let currentSession = null;
+let dashboardAccessPending = false;
 let libraryScope = 'mine';
 let noteActionTargets = new Map();
 let noteLibraryData = [];
@@ -50,18 +51,20 @@ function closeModal() {
   backdrop.classList.add('hidden');
   document.body.style.overflow = '';
   stagedFiles = [];
+  if (dashboardAccessPending && !currentSession?.user) dashboardAccessPending = false;
 }
 function requireBackend() {
   if (supabase) return true;
   openModal(`<div class="modal-kicker">learnByAnkit SETUP</div><h2 id="modalTitle">The site is ready to connect.</h2><p class="modal-copy">Account and file storage are built in. This copy needs the public Supabase project URL and publishable key in <code>config.js</code> before accounts can be enabled.</p><p class="form-note">The browser uses only the public publishable key. Database access is restricted with user-level security rules.</p>`);
   return false;
 }
-function openAuth(mode = 'login') {
+function openAuth(mode = 'login', reason = '') {
   if (!requireBackend()) return;
   const signup = mode === 'signup';
   const reset = mode === 'reset';
   const updatePassword = mode === 'update-password';
-  openModal(`<div class="modal-kicker">${signup ? 'MAKE A LITTLE SPACE FOR LEARNING' : 'YOUR learnByAnkit SPACE'}</div><h2 id="modalTitle">${signup ? 'Start your learning journey.' : reset ? 'Reset your password.' : updatePassword ? 'Choose a new password.' : 'Welcome back.'}</h2><p class="modal-copy">${signup ? 'Create an account to view and download study notes.' : reset ? 'We’ll email you a secure password reset link.' : updatePassword ? 'Choose a new password for your learnByAnkit account.' : 'Log in to see your notes and continue learning.'}</p><form id="authForm">${signup ? '<label class="form-field"><span>Your name</span><input name="name" autocomplete="name" placeholder="How should we call you?" required maxlength="80"></label>' : ''}${updatePassword ? '' : '<label class="form-field"><span>Email address</span><input name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>'}${reset ? '' : '<label class="form-field"><span>Password</span><input name="password" type="password" autocomplete="' + (signup || updatePassword ? 'new-password' : 'current-password') + '" placeholder="At least 8 characters" minlength="8" required></label>'}<button class="primary-button modal-submit" type="submit">${signup ? 'Create my account' : reset ? 'Send reset link' : updatePassword ? 'Save new password' : 'Log in'} <span>→</span></button><p id="authError" class="auth-error" role="alert" hidden></p></form><p class="modal-switch">${signup ? 'Already have an account?' : reset ? 'Remembered your password?' : 'New to learnByAnkit?'} <button id="switchAuth">${signup || reset || updatePassword ? 'Log in' : 'Create an account'}</button>${!signup && !reset && !updatePassword ? ' · <button id="forgotPassword">Forgot password?</button>' : ''}</p><p class="form-note">Your account is securely managed by Supabase. Your password is never stored by this website.</p>`);
+  const loginCopy = reason === 'dashboard' ? 'Please sign in to see your learning progress and quiz results.' : 'Log in to see your notes and continue learning.';
+  openModal(`<div class="modal-kicker">${signup ? 'MAKE A LITTLE SPACE FOR LEARNING' : 'YOUR learnByAnkit SPACE'}</div><h2 id="modalTitle">${signup ? 'Start your learning journey.' : reset ? 'Reset your password.' : updatePassword ? 'Choose a new password.' : 'Welcome back.'}</h2><p class="modal-copy">${signup ? 'Create an account to view and download study notes.' : reset ? 'We’ll email you a secure password reset link.' : updatePassword ? 'Choose a new password for your learnByAnkit account.' : loginCopy}</p><form id="authForm">${signup ? '<label class="form-field"><span>Your name</span><input name="name" autocomplete="name" placeholder="How should we call you?" required maxlength="80"></label>' : ''}${updatePassword ? '' : '<label class="form-field"><span>Email address</span><input name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>'}${reset ? '' : '<label class="form-field"><span>Password</span><input name="password" type="password" autocomplete="' + (signup || updatePassword ? 'new-password' : 'current-password') + '" placeholder="At least 8 characters" minlength="8" required></label>'}<button class="primary-button modal-submit" type="submit">${signup ? 'Create my account' : reset ? 'Send reset link' : updatePassword ? 'Save new password' : 'Log in'} <span>→</span></button><p id="authError" class="auth-error" role="alert" hidden></p></form><p class="modal-switch">${signup ? 'Already have an account?' : reset ? 'Remembered your password?' : 'New to learnByAnkit?'} <button id="switchAuth">${signup || reset || updatePassword ? 'Log in' : 'Create an account'}</button>${!signup && !reset && !updatePassword ? ' · <button id="forgotPassword">Forgot password?</button>' : ''}</p><p class="form-note">Your account is securely managed by Supabase. Your password is never stored by this website.</p>`);
   $('authForm').addEventListener('submit', async event => {
     event.preventDefault();
     const authError = $('authError');
@@ -86,7 +89,11 @@ function openAuth(mode = 'login') {
       result = await supabase.auth.signUp({ email, password: String(form.get('password')), options: { data: { display_name: String(form.get('name')).trim() }, emailRedirectTo: window.location.href.split('#')[0] } });
       if (!result.error) {
         closeModal();
-        if (result.data.session) toast('Your account is ready. Welcome to learnByAnkit!');
+        if (result.data.session) {
+          syncHeader(result.data.session);
+          toast('Your account is ready. Welcome to learnByAnkit!');
+          if (dashboardAccessPending) { dashboardAccessPending = false; navigatePage('dashboard'); }
+        }
         else {
           openModal(`<div class="modal-kicker">ONE QUICK CHECK</div><h2 id="modalTitle">Check your inbox.</h2><p class="modal-copy">We sent a confirmation link to <b>${escapeHtml(email)}</b>. Confirm your email, then log in to start saving notes.</p><button class="primary-button modal-submit" id="confirmLogin">Back to log in <span>→</span></button>`);
           $('confirmLogin').onclick = () => openAuth('login');
@@ -94,7 +101,12 @@ function openAuth(mode = 'login') {
       }
     } else {
       result = await supabase.auth.signInWithPassword({ email, password: String(form.get('password')) });
-      if (!result.error) { closeModal(); toast('You’re logged in. Welcome back!'); }
+      if (!result.error) {
+        syncHeader(result.data.session);
+        closeModal();
+        toast('You’re logged in. Welcome back!');
+        if (dashboardAccessPending) { dashboardAccessPending = false; navigatePage('dashboard'); }
+      }
     }
     if (result?.error) {
       button.disabled = false;
@@ -500,6 +512,110 @@ function renderDashboard() {
   host.querySelectorAll('[data-dashboard-course]').forEach(button => button.addEventListener('click', () => showLesson(button.dataset.dashboardCourse, Number(button.dataset.lessonIndex))));
   host.querySelectorAll('[data-dashboard-quiz]').forEach(button => button.addEventListener('click', () => showQuiz(button.dataset.dashboardQuiz)));
 }
+async function renderCoursePage(courseId) {
+  const host = $('courseDetailContent');
+  const course = courseData[courseId];
+  if (!host || !course) return;
+  host.innerHTML = '<div class="notes-loading"><span class="loading-dot"></span> Loading this learning path…</div>';
+  let lectures = [];
+  let loadError = '';
+  if (supabase) {
+    const { data, error } = await supabase.from('course_lectures').select('id,course_id,title,lecture_type,file_path,file_name,file_size,created_at').eq('course_id', courseId).order('created_at', { ascending: true });
+    if (error) loadError = error.message;
+    else lectures = data || [];
+  } else {
+    loadError = 'Lecture storage is not connected yet.';
+  }
+  const progress = courseProgress()[courseId] || [];
+  const lessons = course.lessons.map((lesson, index) => `<button class="course-lesson" data-course-page-lesson="${courseId}" data-lesson-index="${index}"><span class="lesson-number">${progress.includes(index) ? '✓' : String(index + 1).padStart(2, '0')}</span><span><b>${escapeHtml(lesson.title)}</b><small>${progress.includes(index) ? 'Completed' : 'Short lesson'}</small></span><i>→</i></button>`).join('');
+  const materials = lectures.map(lecture => {
+    const { data: { publicUrl } } = supabase.storage.from('course-materials').getPublicUrl(lecture.file_path);
+    const remove = isAdmin() ? `<button class="quiet-link" type="button" data-delete-lecture="${escapeHtml(lecture.id)}">Remove</button>` : '';
+    return lecture.lecture_type === 'video'
+      ? `<article class="lecture-card"><video controls preload="metadata" src="${escapeHtml(publicUrl)}" aria-label="${escapeHtml(lecture.title)}"></video><div><span class="lecture-kind">VIDEO LECTURE · ${formatSize(lecture.file_size)}</span><h4>${escapeHtml(lecture.title)}</h4><div class="lecture-actions"><a class="quiet-link" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open video</a>${remove}</div></div></article>`
+      : `<article class="lecture-card lecture-pdf"><span class="lecture-file-icon">PDF</span><div><span class="lecture-kind">PDF LECTURE · ${formatSize(lecture.file_size)}</span><h4>${escapeHtml(lecture.title)}</h4><div class="lecture-actions"><a class="quiet-link" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open PDF →</a>${remove}</div></div></article>`;
+  }).join('');
+  const ownerPanel = isAdmin() ? `<form class="lecture-upload-panel" id="courseLectureForm"><div class="lecture-upload-intro"><div><div class="eyebrow section-eyebrow">INSTRUCTOR TOOLS</div><h3>Add a lecture</h3><p>Upload a video or PDF for this course. Files up to 50 MB are supported.</p></div><span>↑</span></div><label class="form-field"><span>Lecture title</span><input id="lectureTitle" name="title" maxlength="140" placeholder="e.g. Lesson 1: HTML basics" required></label><div class="lecture-upload-fields"><label class="form-field"><span>Lecture format</span><select id="lectureType" name="type"><option value="video">Video (MP4 or WebM)</option><option value="pdf">PDF document</option></select></label><label class="form-field"><span>Choose file</span><input id="lectureFile" name="file" type="file" accept="video/mp4,video/webm,application/pdf,.mp4,.webm,.pdf" required></label></div><button class="primary-button" id="uploadLectureButton" type="submit">Upload lecture <span>↑</span></button><p class="form-note" id="lectureUploadStatus" aria-live="polite">Uploads are resumable and restricted to the site owner.</p></form>` : '';
+  const backendMessage = loadError ? `<div class="lecture-notice">Lecture files are not available right now. ${isAdmin() ? 'The lecture storage setup must be enabled in the connected backend before uploads can be saved.' : 'Please check back later.'}</div>` : '';
+  host.innerHTML = `<div class="course-detail-top"><a class="back-to-courses" href="#courses">← All courses</a><span class="course-detail-tag">LEARNING PATH · BEGINNER</span></div><div class="course-detail-hero"><div><div class="eyebrow section-eyebrow">YOUR NEXT LEARNING PATH</div><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.intro)}</p><button class="outline-button" id="coursePageQuiz">Take a quick quiz <span>→</span></button></div><div class="course-detail-art">${courseId === 'web' ? '&lt;/&gt;' : courseId === 'math' ? 'π' : '✿'}</div></div><div class="course-detail-columns"><section class="course-detail-lessons"><div class="course-detail-heading"><div><div class="eyebrow section-eyebrow">COURSE OUTLINE</div><h2>Your lessons</h2><p>${course.lessons.length} short lessons · save your progress as you go</p></div></div><div class="course-lesson-list">${lessons}</div></section><section class="course-detail-materials"><div class="course-detail-heading"><div><div class="eyebrow section-eyebrow">WATCH & READ</div><h2>Lecture library</h2><p>Videos and PDFs for this learning path.</p></div></div>${ownerPanel}${backendMessage}${lectures.length ? `<div class="lecture-list">${materials}</div>` : `<div class="lecture-empty"><span>✳</span><b>${loadError ? 'Lecture library is getting ready.' : 'No lectures uploaded yet.'}</b><small>${isAdmin() ? 'Use the upload form to add a video or PDF to this course.' : 'The course owner will add lecture videos and PDFs here.'}</small></div>`}</section></div>`;
+  host.querySelectorAll('[data-course-page-lesson]').forEach(button => button.addEventListener('click', () => showLesson(button.dataset.coursePageLesson, Number(button.dataset.lessonIndex))));
+  $('coursePageQuiz')?.addEventListener('click', () => showQuiz(courseId));
+  $('courseLectureForm')?.addEventListener('submit', event => uploadCourseLecture(event, courseId));
+  host.querySelectorAll('[data-delete-lecture]').forEach(button => button.addEventListener('click', () => deleteCourseLecture(button.dataset.deleteLecture, courseId)));
+}
+function lectureMimeType(file) {
+  if (file.type === 'application/pdf' || file.type === 'video/mp4' || file.type === 'video/webm') return file.type;
+  const extension = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+  return extension === 'pdf' ? 'application/pdf' : extension === 'mp4' ? 'video/mp4' : extension === 'webm' ? 'video/webm' : '';
+}
+async function resumableLectureUpload(file, path, contentType, title, courseId, onProgress) {
+  const { Upload } = await import('https://esm.sh/tus-js-client@4.3.1');
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('Please sign in again before uploading.');
+  const projectRef = new URL(config.supabaseUrl).hostname.split('.')[0];
+  return new Promise((resolve, reject) => {
+    const upload = new Upload(file, {
+      endpoint: `https://${projectRef}.storage.supabase.co/storage/v1/upload/resumable`,
+      retryDelays: [0, 3000, 5000, 10000, 20000],
+      headers: { authorization: `Bearer ${session.access_token}`, apikey: config.supabasePublishableKey, 'x-upsert': 'false' },
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      chunkSize: 6 * 1024 * 1024,
+      metadata: { bucketName: 'course-materials', objectName: path, contentType, cacheControl: '3600', metadata: JSON.stringify({ title, courseId }) },
+      onProgress,
+      onError: reject,
+      onSuccess: resolve,
+    });
+    upload.start();
+  });
+}
+async function uploadCourseLecture(event, courseId) {
+  event.preventDefault();
+  if (!isAdmin() || !currentSession?.user) return toast('Only the signed-in site owner can upload course lectures.', true);
+  const file = $('lectureFile')?.files?.[0];
+  const title = $('lectureTitle')?.value.trim();
+  const type = $('lectureType')?.value;
+  const mime = file && lectureMimeType(file);
+  const expectedMime = type === 'pdf' ? 'application/pdf' : ['video/mp4', 'video/webm'].includes(mime) ? mime : '';
+  if (!file || !title) return toast('Add a title and choose a lecture file.', true);
+  if (!expectedMime || (type === 'pdf' && mime !== 'application/pdf')) return toast('Choose a PDF or an MP4/WebM video that matches the lecture format.', true);
+  if (file.size > 50 * 1024 * 1024) return toast('Lecture files must be 50 MB or smaller.', true);
+  const button = $('uploadLectureButton');
+  const status = $('lectureUploadStatus');
+  button.disabled = true;
+  const extension = file.name.split('.').pop().toLowerCase();
+  const path = `${currentSession.user.id}/${courseId}/${crypto.randomUUID()}.${extension}`;
+  try {
+    await resumableLectureUpload(file, path, expectedMime, title, courseId, (sent, total) => {
+      const percent = Math.round(sent / total * 100);
+      button.textContent = `Uploading ${percent}%…`;
+      status.textContent = `${formatSize(sent)} of ${formatSize(total)} uploaded`;
+    });
+    const { error } = await supabase.from('course_lectures').insert({ course_id: courseId, title, lecture_type: type, file_path: path, file_name: file.name, file_size: file.size, content_type: expectedMime, created_by: currentSession.user.id });
+    if (error) {
+      await supabase.storage.from('course-materials').remove([path]);
+      throw error;
+    }
+    toast('Lecture uploaded. It is now available on this course page.');
+    await renderCoursePage(courseId);
+  } catch (error) {
+    button.disabled = false;
+    button.innerHTML = 'Upload lecture <span>↑</span>';
+    status.textContent = 'Uploads are resumable and restricted to the site owner.';
+    toast(`Lecture upload failed: ${error.message || 'Please try again.'}`, true);
+  }
+}
+async function deleteCourseLecture(id, courseId) {
+  if (!isAdmin()) return toast('Only the site owner can remove course lectures.', true);
+  const { data: lecture, error: readError } = await supabase.from('course_lectures').select('file_path').eq('id', id).single();
+  if (readError) return toast(readError.message, true);
+  const { error: fileError } = await supabase.storage.from('course-materials').remove([lecture.file_path]);
+  if (fileError) return toast(`Could not remove the lecture file: ${fileError.message}`, true);
+  const { error } = await supabase.from('course_lectures').delete().eq('id', id);
+  if (error) return toast(error.message, true);
+  toast('Lecture removed.');
+  await renderCoursePage(courseId);
+}
 function showCourse(courseId) {
   const course = courseData[courseId];
   if (!course) return;
@@ -516,8 +632,9 @@ function showLesson(courseId, index) {
   const escapedCode = escapeHtml(lesson.code);
   const progress = courseProgress();
   const done = (progress[courseId] || []).includes(index);
+  const returnToCoursePage = document.body.dataset.page === `course-${courseId}`;
   openModal(`<button class="back-to-course" id="backToCourse">← ${escapeHtml(course.title)}</button><div class="modal-kicker">LESSON ${index + 1} OF ${course.lessons.length}</div><h2 id="modalTitle">${escapeHtml(lesson.title)}</h2><p class="modal-copy lesson-copy">${escapeHtml(lesson.text)}</p><pre class="lesson-code"><code>${escapedCode}</code></pre><button class="primary-button modal-submit" id="completeLesson">${done ? 'Completed ✓' : 'Mark lesson complete'} <span>→</span></button>`);
-  $('backToCourse').onclick = () => showCourse(courseId);
+  $('backToCourse').onclick = () => returnToCoursePage ? closeModal() : showCourse(courseId);
   $('completeLesson').onclick = () => {
     const current = courseProgress();
     current[courseId] = [...new Set([...(current[courseId] || []), index])];
@@ -584,6 +701,9 @@ filterCourses();
 const pageTitles = {
   home: 'learnByAnkit — Learn something new, every day',
   courses: 'Courses · learnByAnkit',
+  'course-web': 'Web development · learnByAnkit',
+  'course-math': 'Maths, made clearer · learnByAnkit',
+  'course-science': 'Science all around · learnByAnkit',
   dashboard: 'My learning · learnByAnkit',
   how: 'How learnByAnkit works',
   notes: 'Study notes · learnByAnkit'
@@ -594,10 +714,17 @@ function routeFromHash() {
 }
 function navigatePage(page, options = {}) {
   if (!Object.prototype.hasOwnProperty.call(pageTitles, page)) page = 'home';
+  if (page === 'dashboard' && !currentSession?.user) {
+    dashboardAccessPending = true;
+    if (document.body.dataset.page !== 'home') navigatePage('home', { updateHistory: true, scroll: options.scroll });
+    else if (options.updateHistory === false && window.location.hash === '#dashboard') window.history.replaceState({ learnNestPage: 'home' }, '', '#home');
+    openAuth('login', 'dashboard');
+    return;
+  }
   if (options.scope) libraryScope = options.scope;
   document.body.dataset.page = page;
   document.querySelectorAll('main > [data-page-view]').forEach(section => {
-    const visible = section.dataset.pageView === page;
+    const visible = section.dataset.pageView === page || (section.dataset.pageView === 'course-detail' && page.startsWith('course-'));
     section.classList.toggle('page-view-hidden', !visible);
     section.setAttribute('aria-hidden', String(!visible));
     if (visible) {
@@ -607,7 +734,7 @@ function navigatePage(page, options = {}) {
     }
   });
   document.querySelectorAll('[data-page-link]').forEach(link => {
-    const active = link.dataset.pageLink === page;
+    const active = link.dataset.pageLink === page || (link.dataset.pageLink === 'courses' && page.startsWith('course-'));
     link.classList.toggle('active', active);
     if (active) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -623,10 +750,11 @@ function navigatePage(page, options = {}) {
   if (options.scroll !== false) window.scrollTo({ top: 0, behavior: 'smooth' });
   if (page === 'notes') openNotes(options.scope || libraryScope);
   if (page === 'dashboard') renderDashboard();
+  if (page.startsWith('course-')) renderCoursePage(page.slice('course-'.length));
 }
 document.querySelectorAll('[data-course-open]').forEach(link => link.addEventListener('click', event => {
   event.preventDefault();
-  showCourse(link.dataset.courseOpen);
+  navigatePage(`course-${link.dataset.courseOpen}`);
 }));
 document.addEventListener('click', event => {
   if (event.defaultPrevented) return;
@@ -661,7 +789,9 @@ if (supabase) {
   };
   supabase.auth.onAuthStateChange((event, nextSession) => {
     syncHeader(nextSession);
+    if (!nextSession?.user && document.body.dataset.page === 'dashboard') navigatePage('home');
     if (document.body.dataset.page === 'notes') setTimeout(() => openNotes(libraryScope), 0);
+    if (document.body.dataset.page?.startsWith('course-')) setTimeout(() => renderCoursePage(document.body.dataset.page.slice('course-'.length)), 0);
     if (event === 'PASSWORD_RECOVERY') showRecoveryPrompt();
   });
   const { data: { session } } = await supabase.auth.getSession();
