@@ -12,6 +12,7 @@ let toastTimer;
 let stagedFiles = [];
 let currentSession = null;
 let dashboardAccessPending = false;
+let pendingCoursePage = null;
 let libraryScope = 'mine';
 let noteActionTargets = new Map();
 let noteLibraryData = [];
@@ -51,7 +52,10 @@ function closeModal() {
   backdrop.classList.add('hidden');
   document.body.style.overflow = '';
   stagedFiles = [];
-  if (dashboardAccessPending && !currentSession?.user) dashboardAccessPending = false;
+  if (!currentSession?.user) {
+    dashboardAccessPending = false;
+    pendingCoursePage = null;
+  }
 }
 function requireBackend() {
   if (supabase) return true;
@@ -63,7 +67,7 @@ function openAuth(mode = 'login', reason = '') {
   const signup = mode === 'signup';
   const reset = mode === 'reset';
   const updatePassword = mode === 'update-password';
-  const loginCopy = reason === 'dashboard' ? 'Please sign in to see your learning progress and quiz results.' : 'Log in to see your notes and continue learning.';
+  const loginCopy = reason === 'dashboard' ? 'Please sign in to see your learning progress and quiz results.' : reason === 'course' ? 'Please sign in to open this course and view its lectures.' : 'Log in to see your notes and continue learning.';
   openModal(`<div class="modal-kicker">${signup ? 'MAKE A LITTLE SPACE FOR LEARNING' : 'YOUR learnByAnkit SPACE'}</div><h2 id="modalTitle">${signup ? 'Start your learning journey.' : reset ? 'Reset your password.' : updatePassword ? 'Choose a new password.' : 'Welcome back.'}</h2><p class="modal-copy">${signup ? 'Create an account to view and download study notes.' : reset ? 'We’ll email you a secure password reset link.' : updatePassword ? 'Choose a new password for your learnByAnkit account.' : loginCopy}</p><form id="authForm">${signup ? '<label class="form-field"><span>Your name</span><input name="name" autocomplete="name" placeholder="How should we call you?" required maxlength="80"></label>' : ''}${updatePassword ? '' : '<label class="form-field"><span>Email address</span><input name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>'}${reset ? '' : '<label class="form-field"><span>Password</span><input name="password" type="password" autocomplete="' + (signup || updatePassword ? 'new-password' : 'current-password') + '" placeholder="At least 8 characters" minlength="8" required></label>'}<button class="primary-button modal-submit" type="submit">${signup ? 'Create my account' : reset ? 'Send reset link' : updatePassword ? 'Save new password' : 'Log in'} <span>→</span></button><p id="authError" class="auth-error" role="alert" hidden></p></form><p class="modal-switch">${signup ? 'Already have an account?' : reset ? 'Remembered your password?' : 'New to learnByAnkit?'} <button id="switchAuth">${signup || reset || updatePassword ? 'Log in' : 'Create an account'}</button>${!signup && !reset && !updatePassword ? ' · <button id="forgotPassword">Forgot password?</button>' : ''}</p><p class="form-note">Your account is securely managed by Supabase. Your password is never stored by this website.</p>`);
   $('authForm').addEventListener('submit', async event => {
     event.preventDefault();
@@ -92,7 +96,8 @@ function openAuth(mode = 'login', reason = '') {
         if (result.data.session) {
           syncHeader(result.data.session);
           toast('Your account is ready. Welcome to learnByAnkit!');
-          if (dashboardAccessPending) { dashboardAccessPending = false; navigatePage('dashboard'); }
+          if (pendingCoursePage) { const page = pendingCoursePage; pendingCoursePage = null; dashboardAccessPending = false; navigatePage(page); }
+          else if (dashboardAccessPending) { dashboardAccessPending = false; navigatePage('dashboard'); }
         }
         else {
           openModal(`<div class="modal-kicker">ONE QUICK CHECK</div><h2 id="modalTitle">Check your inbox.</h2><p class="modal-copy">We sent a confirmation link to <b>${escapeHtml(email)}</b>. Confirm your email, then log in to start saving notes.</p><button class="primary-button modal-submit" id="confirmLogin">Back to log in <span>→</span></button>`);
@@ -105,7 +110,8 @@ function openAuth(mode = 'login', reason = '') {
         syncHeader(result.data.session);
         closeModal();
         toast('You’re logged in. Welcome back!');
-        if (dashboardAccessPending) { dashboardAccessPending = false; navigatePage('dashboard'); }
+        if (pendingCoursePage) { const page = pendingCoursePage; pendingCoursePage = null; dashboardAccessPending = false; navigatePage(page); }
+        else if (dashboardAccessPending) { dashboardAccessPending = false; navigatePage('dashboard'); }
       }
     }
     if (result?.error) {
@@ -734,6 +740,13 @@ function routeFromHash() {
 }
 function navigatePage(page, options = {}) {
   if (!Object.prototype.hasOwnProperty.call(pageTitles, page)) page = 'home';
+  if (page.startsWith('course-') && !currentSession?.user) {
+    pendingCoursePage = page;
+    if (document.body.dataset.page !== 'courses') navigatePage('courses', { updateHistory: true, scroll: options.scroll });
+    else if (options.updateHistory === false && window.location.hash === '#' + page) window.history.replaceState({ learnNestPage: 'courses' }, '', '#courses');
+    openAuth('login', 'course');
+    return;
+  }
   if (page === 'dashboard' && !currentSession?.user) {
     dashboardAccessPending = true;
     if (document.body.dataset.page !== 'home') navigatePage('home', { updateHistory: true, scroll: options.scroll });
@@ -810,6 +823,7 @@ if (supabase) {
   supabase.auth.onAuthStateChange((event, nextSession) => {
     syncHeader(nextSession);
     if (!nextSession?.user && document.body.dataset.page === 'dashboard') navigatePage('home');
+    if (!nextSession?.user && document.body.dataset.page?.startsWith('course-')) navigatePage('courses');
     if (document.body.dataset.page === 'notes') setTimeout(() => openNotes(libraryScope), 0);
     if (document.body.dataset.page?.startsWith('course-')) setTimeout(() => renderCoursePage(document.body.dataset.page.slice('course-'.length)), 0);
     if (event === 'PASSWORD_RECOVERY') showRecoveryPrompt();
