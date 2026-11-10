@@ -20,6 +20,8 @@ create table if not exists public.course_lectures (
 
 create index if not exists course_lectures_course_created_at_idx
   on public.course_lectures (course_id, created_at, id);
+create index if not exists course_lectures_created_by_idx
+  on public.course_lectures (created_by);
 
 grant usage on schema public to anon, authenticated;
 grant select on public.course_lectures to anon, authenticated;
